@@ -3,11 +3,13 @@
 
 import sys
 import argparse
-from subprocess import Popen
+from subprocess import Popen, PIPE
+import re
 
 if sys.version_info[0] < 3:  # python 2
     import BaseHTTPServer
     import urlparse
+
     class CompatibilityMixin:
         def send_body(self, msg):
             self.wfile.write(msg+'\n')
@@ -16,6 +18,7 @@ if sys.version_info[0] < 3:  # python 2
 else:  # python 3
     import http.server as BaseHTTPServer
     import urllib.parse as urlparse
+
     class CompatibilityMixin:
         def send_body(self, msg):
             self.wfile.write(bytes(msg+'\n', 'utf-8'))
@@ -39,6 +42,8 @@ class Handler(BaseHTTPServer.BaseHTTPRequestHandler, CompatibilityMixin):
             print("MPV ARGS:", query.get('mpv_args'))
         if "play_url" in query:
             urls = str(query["play_url"][0])
+            seek_time = str(query.get("t", [0])[-1])
+            seek_time = re.sub('[^0-9]', '', seek_time)
             if urls.startswith('magnet:') or urls.endswith('.torrent'):
                 try:
                     pipe = Popen(['peerflix', '-k',  urls, '--', '--force-window'] +
@@ -47,8 +52,14 @@ class Handler(BaseHTTPServer.BaseHTTPRequestHandler, CompatibilityMixin):
                     missing_bin('peerflix')
             else:
                 try:
-                    pipe = Popen(['mpv', urls, '--force-window'] +
-                                 query.get("mpv_args", []))
+                    print("url: ", urls)
+                    if "tiktok" in urls:
+                        command = f'yt-dlp -o - {urls} | mpv --force-window --no-border --volume=80 -ss {seek_time} -'
+                        pipe = Popen(command, shell=True,
+                                     stdout=PIPE, stderr=PIPE)
+                    else:
+                        pipe = Popen(['mpv', urls, '--force-window', '--no-border', '--volume=80', '-ss', seek_time] +
+                                     query.get("mpv_args", []))
                 except FileNotFoundError as e:
                     missing_bin('mpv')
             self.respond(200, "playing...")
@@ -98,9 +109,12 @@ def missing_bin(bin):
 
 
 def start():
-    parser = argparse.ArgumentParser(description='Plays MPV when instructed to by a browser extension.', formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument('--port',   type=int,  default=7531, help='The port to listen on.')
-    parser.add_argument('--public', action='store_true',     help='Accept traffic from other comuters.')
+    parser = argparse.ArgumentParser(description='Plays MPV when instructed to by a browser extension.',
+                                     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument('--port',   type=int,  default=7531,
+                        help='The port to listen on.')
+    parser.add_argument('--public', action='store_true',
+                        help='Accept traffic from other comuters.')
     args = parser.parse_args()
     hostname = '0.0.0.0' if args.public else 'localhost'
     httpd = BaseHTTPServer.HTTPServer((hostname, args.port), Handler)
@@ -114,4 +128,3 @@ def start():
 
 if __name__ == '__main__':
     start()
-
